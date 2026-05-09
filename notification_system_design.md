@@ -130,3 +130,48 @@ Fetching notifications from the database on every single page load is an anti-pa
 * **Stale Data (Eventual Consistency):** If the cache invalidation fails or gets delayed, a student might see a "ghost" unread notification that they already clicked, or miss a new one until the TTL expires.
 * **Memory Constraints:** Redis stores data in RAM, which is expensive. We cannot cache the entire notification history; we must strictly limit the cache to recent/unread notifications only.
 * **System Complexity:** Introduces a new infrastructure component. The backend must now handle cache connection errors, cache stampedes (thundering herd problem), and serialization logic.
+
+
+
+---
+
+# Stage 5
+
+## Shortcomings of the Current Implementation
+The provided pseudocode is a classic synchronous loop processing a massive batch (50,000 students). Its core flaws are:
+1. **Synchronous & Blocking:** It processes users one by one sequentially. If `send_email` takes 1 second, the loop will take ~14 hours to finish.
+2. **Lack of Fault Tolerance:** If an API call fails or times out halfway (as seen in the logs), the process crashes, leaving remaining students unnotified with no easy way to retry.
+3. **Coupling:** Sending emails (slow, external I/O) is tightly coupled with saving to DB and pushing to the app (fast, internal I/O).
+
+## Redesigning for Reliability and Speed
+To make this fast and reliable, we need an **Asynchronous Message Queue** (like RabbitMQ, Kafka, or AWS SQS) and a **Worker Pool**.
+
+**Should DB save and Email happen together?**
+**No.** Saving to the DB (for the in-app notification) is a critical path and should happen immediately so the state is consistent. Sending an email is a secondary, external side-effect. They have vastly different latency profiles and failure rates, so they should be decoupled.
+
+## Revised Pseudocode
+
+```python
+# 1. Main API Handler (Fast Response)
+function notify_all(student_ids: array, message: string):
+    # Bulk insert to DB for extreme speed
+    bulk_save_to_db(student_ids, message)
+    
+    # Dispatch lightweight events to a Message Queue
+    for student_id in student_ids:
+        push_to_app_async(student_id, message) # Handled by WebSocket server
+        enqueue_email_task(student_id, message) # Pushed to MQ (e.g., RabbitMQ)
+        
+    return "Notifications queued successfully"
+
+# 2. Independent Email Worker Process (Running in background)
+function email_worker_process(task_queue):
+    while true:
+        task = task_queue.consume()
+        try:
+            send_email(task.student_id, task.message)
+            task.mark_completed()
+        except APIError:
+            # Automatic retry mechanism via MQ
+            task.retry(delay=5_minutes, max_retries=3)
+            log_error("Email failed, retrying...")
