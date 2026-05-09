@@ -102,3 +102,31 @@ SELECT DISTINCT studentID
 FROM notifications 
 WHERE notificationType = 'Placement' 
 AND createdAt >= NOW() - INTERVAL 7 DAY;
+
+
+
+---
+
+# Stage 4
+
+## Performance Improvement Strategy
+Fetching notifications from the database on every single page load is an anti-pattern for high-traffic applications. To resolve the DB overwhelming issue and improve performance, I suggest implementing a **Caching Layer using Redis**.
+
+### Proposed Solution: Redis Caching
+1. **Cache Structure:** Use a Redis Hash or List for each user. For example, a key like `user:1042:notifications:unread`.
+2. **Read Path (Page Load):** - When a student loads the page, the backend first checks Redis. 
+   - If the data is present (Cache Hit), return it instantly. 
+   - If not (Cache Miss), fetch from MongoDB, store a copy in Redis with a TTL (e.g., 10 minutes), and then return the data.
+3. **Write Path (New Notification):** - When HR sends a new notification, save it to MongoDB and *also* push it directly to the student's Redis cache.
+4. **Invalidation:** - When a student marks a notification as "read", update MongoDB and immediately remove that specific notification ID from their Redis cache.
+
+### Tradeoffs of Caching Strategy
+**Pros:**
+* **Drastically Reduced DB Load:** MongoDB is shielded from repetitive, expensive read queries.
+* **Extremely Low Latency:** Redis reads from RAM, providing sub-millisecond response times, resulting in a much snappier user experience.
+* **Cost Effective:** Cheaper to scale a Redis cluster for reads than vertically scaling a MongoDB instance.
+
+**Cons / Tradeoffs:**
+* **Stale Data (Eventual Consistency):** If the cache invalidation fails or gets delayed, a student might see a "ghost" unread notification that they already clicked, or miss a new one until the TTL expires.
+* **Memory Constraints:** Redis stores data in RAM, which is expensive. We cannot cache the entire notification history; we must strictly limit the cache to recent/unread notifications only.
+* **System Complexity:** Introduces a new infrastructure component. The backend must now handle cache connection errors, cache stampedes (thundering herd problem), and serialization logic.
