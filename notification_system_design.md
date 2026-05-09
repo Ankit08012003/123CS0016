@@ -1,0 +1,69 @@
+# Stage 1
+
+## Core Actions
+The notification platform should support the following core actions:
+1. Fetch all notifications (with support for filtering unread ones).
+2. Mark a specific notification as read.
+3. Establish a persistent connection for real-time live updates.
+
+## REST API Endpoints & Contracts
+
+### 1. Fetch User Notifications
+**Endpoint:** `GET /api/v1/notifications`
+**Description:** Retrieves a list of notifications for the authenticated student.
+**Headers:**
+`{"Authorization": "Bearer <jwt_token>"}`
+**Query Parameters:** `?status=unread&limit=20`
+
+**Response (200 OK):**
+`{ "success": true, "data": [ { "id": "b283218f-ea5a-4b7c-93a9-1f2f240d64b0", "type": "Placement", "message": "CSX Corporation hiring", "isRead": false, "timestamp": "2026-04-22T17:51:18Z" } ] }`
+
+### 2. Mark Notification as Read
+**Endpoint:** `PATCH /api/v1/notifications/:id/read`
+**Description:** Updates the status of a specific notification to 'read'.
+**Headers:**
+`{ "Authorization": "Bearer <jwt_token>", "Content-Type": "application/json" }`
+
+**Response (200 OK):**
+`{ "success": true, "message": "Notification marked as read successfully." }`
+
+## Real-time Notification Mechanism
+To provide real-time updates to students regarding Placements, Events, and Results, the optimal choice is **WebSockets**. 
+* **Connection:** When a student logs in, the client establishes a persistent WebSocket connection to the server.
+* **Authentication:** The initial WebSocket handshake will include the JWT token for student identification and security.
+* **Mechanism:** When a new event occurs (e.g., HR publishes a placement update), the backend persists the notification to the database and immediately broadcasts a `new_notification` JSON payload over the active WebSocket channel to the targeted students. 
+
+
+---
+
+# Stage 2
+
+## Persistent Storage Choice
+I suggest **MongoDB** (NoSQL) for the notification system. 
+**Reasoning:**
+1. **High Write Throughput:** Notifications are highly write-intensive. MongoDB handles rapid, high-volume inserts efficiently.
+2. **Flexible Schema:** Different notification types (Placement, Event, Result) might require slightly different metadata in the future. MongoDB's document model allows easy schema evolution.
+3. **JSON Native:** Since our backend is in Node.js/Express, MongoDB's BSON/JSON format integrates seamlessly without complex ORM mappings.
+
+## Database Schema
+Below is the proposed MongoDB schema for the `Notification` collection:
+`{ "_id": "ObjectId", "studentId": { "type": "String", "required": true, "index": true }, "type": { "type": "String", "enum": ["Placement", "Event", "Result"], "required": true }, "message": { "type": "String", "required": true }, "isRead": { "type": "Boolean", "default": false }, "createdAt": { "type": "Date", "default": "Date.now", "index": -1 } }`
+
+## Scalability Problems and Solutions
+**Problems as data volume increases:**
+1. **Slow Queries:** Querying millions of records to find a specific student's unread notifications will become extremely slow.
+2. **Storage Bloat:** Accumulating historical notifications forever will consume massive disk space and degrade database performance.
+
+**Solutions:**
+1. **Compound Indexing:** Create a compound index on `{ studentId: 1, isRead: 1, createdAt: -1 }`. This ensures fetching unread notifications is lightning fast.
+2. **TTL (Time-To-Live) Indexes:** Implement a TTL index on `createdAt` to automatically delete/archive notifications older than 6 months.
+3. **Caching Layer:** Use Redis to cache the "unread count" for active students.
+
+## NoSQL Queries
+Based on the REST APIs designed in Stage 1, here are the applicable MongoDB queries:
+
+**1. Fetch User's Unread Notifications (API 1):**
+`db.notifications.find({ studentId: "1042", isRead: false }).sort({ createdAt: -1 }).limit(20);`
+
+**2. Mark Notification as Read (API 2):**
+`db.notifications.updateOne({ _id: ObjectId("b283218f-ea5a-4b7c-93a9-1f2f240d64b0") }, { $set: { isRead: true } });`
