@@ -175,3 +175,23 @@ function email_worker_process(task_queue):
             # Automatic retry mechanism via MQ
             task.retry(delay=5_minutes, max_retries=3)
             log_error("Email failed, retrying...")
+
+
+
+---
+
+# Stage 6
+
+## Priority Inbox Approach
+To display the top 'n' most important notifications, we need a sorting mechanism based on two parameters: **Weight** and **Recency**.
+1. **Weight Mapping:** We assign a numerical value to each type: `Placement` = 3, `Result` = 2, `Event` = 1.
+2. **Sorting Logic:** We sort the notifications primarily by their assigned weight in descending order. If two notifications have the exact same weight, we fall back to a secondary sort using the `Timestamp` in descending order (newer notifications appear first).
+3. **Retrieval:** After sorting, we simply slice the array to get the top `n` (e.g., top 10) notifications.
+
+## Maintaining Top 10 Efficiently
+As new notifications keep streaming in real-time, resorting the entire database/list every time is computationally expensive $O(N \log N)$. 
+**Efficient Solution:** We can use a **Min-Heap (Priority Queue)** of size `k` (where $k=10$). 
+- When a new notification arrives, we compare its priority (weight + timestamp) with the root of the Min-Heap (the lowest priority item in our top 10).
+- If the new notification's priority is higher, we pop the root and insert the new notification. 
+- This ensures the top 10 list is maintained in $O(\log k)$ time per insertion, which is highly efficient for real-time streams.
+
