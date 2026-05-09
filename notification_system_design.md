@@ -67,3 +67,38 @@ Based on the REST APIs designed in Stage 1, here are the applicable MongoDB quer
 
 **2. Mark Notification as Read (API 2):**
 `db.notifications.updateOne({ _id: ObjectId("b283218f-ea5a-4b7c-93a9-1f2f240d64b0") }, { $set: { isRead: true } });`
+
+
+
+---
+
+# Stage 3
+
+## Query Analysis
+**Original Query:** `SELECT * FROM notifications WHERE studentID = 1042 AND isRead = false ORDER BY createdAt DESC;`
+
+1. **Is this query accurate?**
+   Logically, yes. It correctly filters by student, checks for unread status, and sorts by the newest first.
+2. **Why is it slow?**
+   - **Full Table Scan:** With 5,000,000 rows, lacking a proper index means the DB engine might be scanning every row.
+   - **Using `SELECT *`:** Fetching all columns increases network payload and memory consumption unnecessarily.
+   - **Expensive Sort:** Sorting 5 million rows on `createdAt` without an index triggers a massive, slow in-memory "filesort".
+
+## Proposed Changes and Computation Cost
+**Changes:**
+1. Avoid `SELECT *`. Explicitly select only required columns (e.g., `SELECT id, message, timestamp`).
+2. Implement a **Composite Index** on `(studentID, isRead, createdAt)`.
+**Computation Cost:**
+Without indexes, the cost is **O(N)** (where N is 5,000,000). With the B-Tree composite index, the database can instantly seek the exact rows and return them pre-sorted, reducing the time complexity to **O(log N)**, making it virtually instantaneous.
+
+## Advice on Indexing Every Column
+The advice to "add indexes on every column to be safe" is **highly ineffective and dangerous**. 
+- **Storage Overhead:** Indexes duplicate data in B-Tree structures, massively bloating the database size.
+- **Write Degradation:** Every `INSERT`, `UPDATE`, or `DELETE` operation requires updating all those indexes, which will cripple the system's write performance. Notifications are write-heavy, making this a terrible approach.
+
+## Query for Placement Notifications in the Last 7 Days
+```sql
+SELECT DISTINCT studentID 
+FROM notifications 
+WHERE notificationType = 'Placement' 
+AND createdAt >= NOW() - INTERVAL 7 DAY;
